@@ -68,9 +68,7 @@ export default function Login() {
           </button>
         </form>
 
-        <p className="login-hint">
-          Demo: <code>{DEMO_EMAIL}</code> / <code>{DEMO_PASSWORD}</code>
-        </p>
+      
       </div>
     </div>
   )
