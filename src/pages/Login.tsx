@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { DEMO_EMAIL, DEMO_PASSWORD, login } from '../lib/auth'
+import { DEMO_EMAIL, login } from '../lib/auth'
 
 export default function Login() {
   const navigate = useNavigate()
