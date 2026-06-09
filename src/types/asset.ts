@@ -1,3 +1,5 @@
+import type { AssetPendingRow } from './pending'
+
 export type AssetRow = {
   id: number
   created_at?: string
@@ -7,7 +9,7 @@ export type AssetRow = {
   daily_change_percentage: number
   assets_name: string
   user: string | null
-  pending: number | null
+  asset_pendings?: AssetPendingRow[]
 }
 
 export type AssetForm = {
@@ -17,7 +19,6 @@ export type AssetForm = {
   last: string
   daily_change_percentage: string
   user: string
-  pending: string
 }
 
 export function assetToForm(asset: AssetRow): AssetForm {
@@ -28,7 +29,6 @@ export function assetToForm(asset: AssetRow): AssetForm {
     last: String(asset.last ?? 0),
     daily_change_percentage: String(asset.daily_change_percentage ?? 0),
     user: asset.user ?? '',
-    pending: asset.pending != null ? String(asset.pending) : '',
   }
 }
 
@@ -41,6 +41,5 @@ export function formToPayload(form: AssetForm) {
     last: Number(form.last) || 0,
     daily_change_percentage: Number(form.daily_change_percentage) || 0,
     user: form.user.trim() || null,
-    pending: form.pending.trim() ? Number(form.pending) : null,
   }
 }

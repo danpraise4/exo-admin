@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getSession, logout } from '../lib/auth'
+import {
+  createPending,
+  deletePending,
+  updatePending,
+} from '../lib/pendings'
 import {
   createAsset,
   deleteAsset,
   fetchAppSettings,
   fetchAssets,
+  isSupabaseConfigured,
   updateAppState,
   updateAsset,
 } from '../lib/supabase'
@@ -16,6 +22,7 @@ import {
   type AssetForm,
   type AssetRow,
 } from '../types/asset'
+import type { AssetPendingRow, PendingForm } from '../types/pending'
 
 const emptyForm = (): AssetForm => ({
   assets_name: '',
@@ -24,8 +31,20 @@ const emptyForm = (): AssetForm => ({
   last: '0',
   daily_change_percentage: '0',
   user: '',
-  pending: '',
 })
+
+const emptyPendingForm = (): PendingForm => ({
+  amount_usd: '',
+  source: 'From external wallet',
+})
+
+function formatUsd(amount: number) {
+  return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function asPendingList(value: AssetRow['asset_pendings']): AssetPendingRow[] {
+  return Array.isArray(value) ? value : []
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -40,6 +59,23 @@ export default function Dashboard() {
   const [error, setError] = useState('')
   const [appState, setAppState] = useState<AppDisplayState>('A')
   const [savingState, setSavingState] = useState(false)
+  const [showPendingForm, setShowPendingForm] = useState(false)
+  const [editingPendingId, setEditingPendingId] = useState<number | null>(null)
+  const [pendingForm, setPendingForm] = useState<PendingForm>(emptyPendingForm())
+  const [pendingError, setPendingError] = useState('')
+  const [pendingSaving, setPendingSaving] = useState(false)
+
+  const selectedAsset = useMemo(
+    () => (selectedId !== null ? assets.find((a) => a.id === selectedId) : undefined),
+    [assets, selectedId],
+  )
+
+  const pendings = asPendingList(selectedAsset?.asset_pendings)
+
+  const totalPendingCount = useMemo(
+    () => assets.reduce((sum, a) => sum + asPendingList(a.asset_pendings).length, 0),
+    [assets],
+  )
 
   const loadAssets = useCallback(async () => {
     setLoading(true)
@@ -77,6 +113,13 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setLoading(false)
+      setError(
+        'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to .env and restart the dev server.',
+      )
+      return
+    }
     void loadAssets()
     void loadAppState()
   }, [loadAssets, loadAppState])
@@ -97,11 +140,19 @@ export default function Dashboard() {
     }
   }
 
+  function resetPendingForm() {
+    setShowPendingForm(false)
+    setEditingPendingId(null)
+    setPendingForm(emptyPendingForm())
+    setPendingError('')
+  }
+
   function selectAsset(asset: AssetRow) {
     setSelectedId(asset.id)
     setForm(assetToForm(asset))
     setMessage('')
     setError('')
+    resetPendingForm()
   }
 
   function updateField<K extends keyof AssetForm>(key: K, value: AssetForm[K]) {
@@ -174,6 +225,80 @@ export default function Dashboard() {
     setForm(emptyForm())
     setMessage('')
     setError('')
+    resetPendingForm()
+  }
+
+  function handleAddPending() {
+    setShowPendingForm(true)
+    setEditingPendingId(null)
+    setPendingForm(emptyPendingForm())
+    setPendingError('')
+  }
+
+  function handleEditPending(pending: AssetPendingRow) {
+    setShowPendingForm(true)
+    setEditingPendingId(pending.id)
+    setPendingForm({
+      amount_usd: String(pending.amount_usd),
+      source: pending.source,
+    })
+    setPendingError('')
+  }
+
+  async function handleSavePending(event: FormEvent) {
+    event.preventDefault()
+    if (selectedId === null) return
+
+    const amount = Number(pendingForm.amount_usd)
+    if (!pendingForm.amount_usd.trim() || Number.isNaN(amount) || amount <= 0) {
+      setPendingError('Amount must be greater than 0')
+      return
+    }
+
+    const source = pendingForm.source.trim() || 'From external wallet'
+
+    setPendingSaving(true)
+    setPendingError('')
+    setMessage('')
+    setError('')
+
+    try {
+      if (editingPendingId !== null) {
+        await updatePending(editingPendingId, amount, source)
+        setMessage('Pending transfer updated')
+      } else {
+        await createPending(selectedId, amount, source)
+        setMessage('Pending transfer added')
+      }
+      resetPendingForm()
+      await loadAssets()
+    } catch (err) {
+      setPendingError(err instanceof Error ? err.message : 'Failed to save pending transfer')
+    } finally {
+      setPendingSaving(false)
+    }
+  }
+
+  async function handleDeletePending(pending: AssetPendingRow) {
+    if (!confirm(`Delete pending transfer of ${formatUsd(pending.amount_usd)}?`)) return
+
+    setPendingSaving(true)
+    setPendingError('')
+    setMessage('')
+    setError('')
+
+    try {
+      await deletePending(pending.id)
+      if (editingPendingId === pending.id) {
+        resetPendingForm()
+      }
+      setMessage('Pending transfer deleted')
+      await loadAssets()
+    } catch (err) {
+      setPendingError(err instanceof Error ? err.message : 'Failed to delete pending transfer')
+    } finally {
+      setPendingSaving(false)
+    }
   }
 
   const totalBalance = assets.reduce((sum, a) => sum + (a.assets_balance || 0), 0)
@@ -192,6 +317,15 @@ export default function Dashboard() {
           </button>
         </div>
       </header>
+
+      {!isSupabaseConfigured && (
+        <section className="config-banner">
+          <p className="form-error">
+            Supabase is not configured. Copy <code>.env.example</code> to <code>.env</code>, add
+            your project URL and anon key, then restart <code>npm run dev</code>.
+          </p>
+        </section>
+      )}
 
       <section className="state-panel">
         <div className="panel-head">
@@ -225,7 +359,7 @@ export default function Dashboard() {
         </div>
         <div className="stat-card">
           <span>Pending transfers</span>
-          <strong>{assets.filter((a) => (a.pending ?? 0) > 0).length}</strong>
+          <strong>{totalPendingCount}</strong>
         </div>
       </section>
 
@@ -319,16 +453,6 @@ export default function Dashboard() {
                   placeholder="userA or empty for all"
                 />
               </label>
-              <label>
-                Pending (USD)
-                <input
-                  type="number"
-                  step="0.01"
-                  value={form.pending}
-                  onChange={(e) => updateField('pending', e.target.value)}
-                  placeholder="0 = hidden in app"
-                />
-              </label>
             </div>
 
             {message && <p className="form-success">{message}</p>}
@@ -364,6 +488,105 @@ export default function Dashboard() {
               </button>
             </div>
           </form>
+
+          {selectedId !== null && (
+            <section className="pending-section">
+              <div className="panel-head">
+                <h3>Pending transfers ({pendings.length})</h3>
+                <button
+                  type="button"
+                  className="btn-small"
+                  onClick={handleAddPending}
+                  disabled={pendingSaving || showPendingForm}
+                >
+                  + Add pending
+                </button>
+              </div>
+
+              {pendings.length === 0 && !showPendingForm ? (
+                <p className="muted pending-empty">No pending transfers for this asset.</p>
+              ) : (
+                <ul className="pending-list">
+                  {pendings.map((pending, index) => (
+                    <li key={pending.id} className="pending-item">
+                      <span className="pending-info">
+                        <span className="pending-index">#{index + 1}</span>
+                        <span className="pending-amount">{formatUsd(pending.amount_usd)}</span>
+                        <span className="pending-sep">·</span>
+                        <span className="pending-source">{pending.source}</span>
+                      </span>
+                      <span className="pending-actions">
+                        <button
+                          type="button"
+                          className="btn-small"
+                          onClick={() => handleEditPending(pending)}
+                          disabled={pendingSaving}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-small btn-small-danger"
+                          onClick={() => handleDeletePending(pending)}
+                          disabled={pendingSaving}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {showPendingForm && (
+                <form className="pending-form" onSubmit={handleSavePending}>
+                  <div className="form-grid">
+                    <label>
+                      Amount (USD)
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={pendingForm.amount_usd}
+                        onChange={(e) =>
+                          setPendingForm((prev) => ({ ...prev, amount_usd: e.target.value }))
+                        }
+                        required
+                      />
+                    </label>
+                    <label>
+                      Source
+                      <input
+                        value={pendingForm.source}
+                        onChange={(e) =>
+                          setPendingForm((prev) => ({ ...prev, source: e.target.value }))
+                        }
+                        placeholder="From external wallet"
+                      />
+                    </label>
+                  </div>
+                  {pendingError && <p className="form-error">{pendingError}</p>}
+                  <div className="form-actions">
+                    <button type="submit" className="btn-primary" disabled={pendingSaving}>
+                      {pendingSaving
+                        ? 'Saving…'
+                        : editingPendingId !== null
+                          ? 'Update pending'
+                          : 'Add pending'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={resetPendingForm}
+                      disabled={pendingSaving}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          )}
         </main>
       </div>
     </div>
